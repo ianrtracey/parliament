@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/nlopes/slack"
+	"github.com/looplab/fsm"
+
 )
 
 type Message struct {
@@ -18,6 +20,10 @@ type Message struct {
 
 type SlackToken struct {
 	Token string `json:"api_token"`
+}
+
+type Trial struct {
+	State *fsm.FSM
 }
 
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
@@ -35,9 +41,28 @@ func getToken() ([]byte, error) {
 	return ioutil.ReadFile("./token.json")
 }
 
+func (trial *Trial) enterState(e *fsm.Event) {
+    fmt.Printf("The door to %s is %s\n", trial.State, e.Dst)
+}
+
 
 
 func main() {
+
+
+	trial := &Trial{}
+
+	trial.State = fsm.NewFSM(
+		"inactive",
+		fsm.Events{
+			{Name: "start", Src: []string{"inactive"}, Dst: "started"},
+			{Name: "submit_topic", Src: []string{"started"}, Dst: "waiting_on_items"},
+		},
+		fsm.Callbacks{
+            "enter_state": func(e *fsm.Event) { trial.enterState(e) },
+        },
+	)
+
 	logger := log.New(os.Stdout, "slack-bot:", log.Lshortfile|log.LstdFlags)
 	bot_handle := "@U1QAH7PRD"
 	slack.SetLogger(logger)
@@ -75,8 +100,9 @@ Loop:
 					case *slack.MessageEvent:
 						fmt.Printf("Message: %v\n", ev)
 						if strings.Contains(ev.Text, bot_handle) {
-							rtm.SendMessage(rtm.NewOutgoingMessage("Here ye, here ye! Should we hold a trial?", ev.Channel))
+							rtm.SendMessage(rtm.NewOutgoingMessage("Here ye, here ye! Should we hold a trial?", ev.Channel))							
 						}
+						fmt.Printf("Trial: %v\n", trial)
 
 
 					case *slack.PresenceChangeEvent:
