@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"github.com/nlopes/slack"
 	"io/ioutil"
 	"os"
+	"log"
+	"strings"
+
+	"github.com/nlopes/slack"
 )
 
 type Message struct {
@@ -28,30 +31,70 @@ func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
+func getToken() ([]byte, error) {
+	return ioutil.ReadFile("./token.json")
+}
 
 
 
 func main() {
-	port := ":8080"
-	token_file, err  := ioutil.ReadFile("./token.json")
+	logger := log.New(os.Stdout, "slack-bot:", log.Lshortfile|log.LstdFlags)
+	bot_handle := "@U1QAH7PRD"
+	slack.SetLogger(logger)
+	var slack_token SlackToken
+	token_file, err  := getToken()
+	
 	if err != nil {
 		fmt.Printf("File Error: %s\n", err)
 		os.Exit(1)
 	}
-	var slack_token SlackToken
+
 	json.Unmarshal(token_file, &slack_token)
-	fmt.Printf("result %s\n", slack_token.Token)
 	slack_api := slack.New(slack_token.Token)
 	slack_api.SetDebug(true)
-	groups, err := slack_api.GetChannels(false)
-	if err != nil {
-		fmt.Printf("%s\n", err)
-		return
-	}
-	for _, group:= range groups {
-		fmt.Printf("yo yo yo %s", group.ID)
-	}
+
 	http.HandleFunc("/heartbeat", heartBeatHandler)
-	fmt.Printf("Serving on port %s\n", port)
-	http.ListenAndServe(port, nil)
+
+	rtm := slack_api.NewRTM()
+	go rtm.ManageConnection()
+
+Loop:
+	for {
+		select {
+		case msg := <- rtm.IncomingEvents:
+				fmt.Print("Event Received: ")
+				switch ev := msg.Data.(type) {
+					case *slack.HelloEvent:
+						// Ignore
+
+					case *slack.ConnectedEvent:
+						fmt.Println("Infos:", ev.Info)
+						fmt.Println("COnnection counter:", ev.ConnectionCount)
+						rtm.SendMessage(rtm.NewOutgoingMessage("Hello World", "#parliament-test"))
+
+					case *slack.MessageEvent:
+						fmt.Printf("Message: %v\n", ev)
+						if strings.Contains(ev.Text, bot_handle) {
+							rtm.SendMessage(rtm.NewOutgoingMessage("Here ye, here ye! Should we hold a trial?", ev.Channel))
+						}
+
+
+					case *slack.PresenceChangeEvent:
+						fmt.Printf("Presence Change %v\n", ev)
+
+					case *slack.LatencyReport:
+						fmt.Printf("Current latency: %v\n", ev.Value)
+
+					case *slack.RTMError:
+						fmt.Printf("Error: %s\n", ev.Error())
+
+					case *slack.InvalidAuthEvent:
+						fmt.Printf("Invalid credentials")
+						break Loop
+
+					default:
+						// All events ignored
+				}	
+		}
+	}
 }
