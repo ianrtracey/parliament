@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ianrtracey/ballot"
 	"github.com/looplab/fsm"
 	"github.com/nlopes/slack"
 )
@@ -19,16 +20,6 @@ type Message struct {
 
 type SlackToken struct {
 	Token string `json:"api_token"`
-}
-
-type Ballet struct {
-	Topic string
-	Items []string
-}
-
-func (ballet *Ballet) AddItem(item string) []string {
-	ballet.Items = append(ballet.Items, item)
-	return ballet.Items
 }
 
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +37,7 @@ func getToken() ([]byte, error) {
 	return ioutil.ReadFile("./token.json")
 }
 
-func HandleParliamentMessage(ev *slack.MessageEvent, rtm *slack.RTM, trial *fsm.FSM, ballet *Ballet) {
+func HandleParliamentMessage(ev *slack.MessageEvent, rtm *slack.RTM, trial *fsm.FSM, ballot *ballot.Ballot, slack_api *slack.Client) {
 	fmt.Println(trial.Current())
 	switch trial.Current() {
 	case "inactive":
@@ -78,13 +69,26 @@ func HandleParliamentMessage(ev *slack.MessageEvent, rtm *slack.RTM, trial *fsm.
 		if strings.Contains(ev.Text, "done") {
 			trial.Event("complete_items")
 			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", ev.Channel))
+			channel_info, err := slack_api.GetChannelInfo(ev.Channel)
+			if err != nil {
+				panic(fmt.Sprintf("Something went wrong getting the channel infomation for %v\n", ev.Channel))
+			}
+			fmt.Println(channel_info)
+			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", "U02NWHMNG"))
+			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", "U1QAH7PRD"))
+			ok, already_open, channel_id, err := slack_api.OpenIMChannel("U02NWHMNG")
+			if err != nil {
+				panic("Something went wrong!")
+			}
+			fmt.Println("channel %v\n %v\n %v\n", channel_id, ok, already_open)
+			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", channel_id))
 			return
 		}
-		ballet.AddItem(ev.Text)
-		fmt.Println(ballet.Items)
+		ballot.AddItem(ev.Text)
+		fmt.Println(ballot.Items)
 
 	default:
-		panic("unhandled case!")
+		panic("undhandled case!")
 	}
 }
 
@@ -97,11 +101,11 @@ func main() {
 			{Name: "confirm_trial", Src: []string{"awaiting_confirmation_of_trial"}, Dst: "waiting_on_topic"},
 			{Name: "decline_trial", Src: []string{"awaiting_confirmation_of_trial"}, Dst: "inactive"},
 			{Name: "submit_topic", Src: []string{"waiting_on_topic"}, Dst: "waiting_on_items"},
-			{Name: "complete_items", Src: []string{"waiting_on_items"}, Dst: "preparing_ballet"},
+			{Name: "complete_items", Src: []string{"waiting_on_items"}, Dst: "preparing_ballot"},
 		},
 		fsm.Callbacks{},
 	)
-	ballet := &Ballet{}
+	ballot := &ballot.Ballot{}
 
 	logger := log.New(os.Stdout, "slack-bot:", log.Lshortfile|log.LstdFlags)
 	// need to set bot_handle to be dynamic as the id could change depending on the instance
@@ -126,6 +130,7 @@ func main() {
 
 Loop:
 	for {
+
 		select {
 		case msg := <-rtm.IncomingEvents:
 			fmt.Print("Event Received: ")
@@ -135,12 +140,12 @@ Loop:
 
 			case *slack.ConnectedEvent:
 				fmt.Println("Infos:", ev.Info)
-				fmt.Println("COnnection counter:", ev.ConnectionCount)
+				fmt.Println("Connection counter:", ev.ConnectionCount)
 
 			case *slack.MessageEvent:
 				fmt.Printf("Message: %v\n", ev)
 				if strings.Contains(ev.Text, bot_handle) {
-					HandleParliamentMessage(ev, rtm, trial, ballet)
+					HandleParliamentMessage(ev, rtm, trial, ballot, slack_api)
 				}
 				fmt.Printf("Trial: %v\n", trial)
 
