@@ -3,13 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/ianrtracey/ballot"
+	"github.com/ianrtracey/token"
 	"github.com/looplab/fsm"
 	"github.com/nlopes/slack"
 )
@@ -18,23 +17,12 @@ type Message struct {
 	Text string
 }
 
-type SlackToken struct {
-	Token string `json:"api_token"`
-}
-
-func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
-	m := Message{"OK"}
-	resp, err := json.Marshal(m)
-
-	if err != nil {
-		panic(err)
+func Map(vs []string, f func(string) string) []string {
+	vsm := make([]string, len(vs))
+	for i, v := range vs {
+		vsm[i] = f(v)
 	}
-
-	w.Write(resp)
-}
-
-func getToken() ([]byte, error) {
-	return ioutil.ReadFile("./token.json")
+	return vsm
 }
 
 func HandleParliamentMessage(ev *slack.MessageEvent, rtm *slack.RTM, trial *fsm.FSM, ballot *ballot.Ballot, slack_api *slack.Client) {
@@ -75,17 +63,23 @@ func HandleParliamentMessage(ev *slack.MessageEvent, rtm *slack.RTM, trial *fsm.
 			}
 			fmt.Println(channel_info)
 			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", "U02NWHMNG"))
-			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", "U1QAH7PRD"))
 			ok, already_open, channel_id, err := slack_api.OpenIMChannel("U02NWHMNG")
 			if err != nil {
 				panic("Something went wrong!")
 			}
 			fmt.Println("channel %v\n %v\n %v\n", channel_id, ok, already_open)
-			rtm.SendMessage(rtm.NewOutgoingMessage("Awesome! Commence the voting! DM'ing the channel...", channel_id))
+			// This buils the options string
+			message := fmt.Sprintf(strings.Join(ballot.Items, "\n"))
+			rtm.SendMessage(rtm.NewOutgoingMessage(message, channel_id))
+
+			trial.Event("open_polling")
 			return
 		}
 		ballot.AddItem(ev.Text)
 		fmt.Println(ballot.Items)
+
+	case "polling":
+		fmt.Println(ev.Text)
 
 	default:
 		panic("undhandled case!")
@@ -102,6 +96,7 @@ func main() {
 			{Name: "decline_trial", Src: []string{"awaiting_confirmation_of_trial"}, Dst: "inactive"},
 			{Name: "submit_topic", Src: []string{"waiting_on_topic"}, Dst: "waiting_on_items"},
 			{Name: "complete_items", Src: []string{"waiting_on_items"}, Dst: "preparing_ballot"},
+			{Name: "open_polling", Src: []string{"preparing_ballot"}, Dst: "polling"},
 		},
 		fsm.Callbacks{},
 	)
@@ -111,8 +106,8 @@ func main() {
 	// need to set bot_handle to be dynamic as the id could change depending on the instance
 	bot_handle := "@U1QAH7PRD"
 	slack.SetLogger(logger)
-	var slack_token SlackToken
-	token_file, err := getToken()
+	var slack_token token.SlackToken
+	token_file, err := token.GetToken()
 
 	if err != nil {
 		fmt.Printf("File Error: %s\n", err)
@@ -122,8 +117,6 @@ func main() {
 	json.Unmarshal(token_file, &slack_token)
 	slack_api := slack.New(slack_token.Token)
 	slack_api.SetDebug(true)
-
-	http.HandleFunc("/heartbeat", heartBeatHandler)
 
 	rtm := slack_api.NewRTM()
 	go rtm.ManageConnection()
